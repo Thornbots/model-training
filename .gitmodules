@@ -1,3 +1,4 @@
 [submodule "runs"]
 	path = runs
 	url = https://github.com/Thornbots/trained-models.git
+	brainch = main
