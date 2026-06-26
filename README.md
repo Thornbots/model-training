@@ -1,5 +1,12 @@
 # model-training
 
+# *WARNING*
+*YOU MUST INSTALL GIT-LFS before cloning*
+
+then clone by 
+```bash
+git clone --recurse-submodules https://github.com/Thornbots/model-training.git
+```
 
 
 ## Git submodules are hard, example of updating them below:
