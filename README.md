@@ -2,7 +2,7 @@
 
 
 
-## Git submodules are hard:
+## Git submodules are hard, example of updating them below:
 ``` bash
 cd runs
 git add .
