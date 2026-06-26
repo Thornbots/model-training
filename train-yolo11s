@@ -3,24 +3,23 @@
 YOLO11s training pipeline
 Roboflow download → local training → ONNX export for Isaac ROS / trtexec
 
-After training, copy the .onnx to the Jetson and run:
-    /usr/src/tensorrt/bin/trtexec \
-        --onnx=best.onnx \
-        --saveEngine=best.plan \
-        --fp16
+After training, copy the .onnx to the Jetson and run following command inside of isaac-ros:
+        trtexec --onnx=${ISAAC_ROS_WS}/isaac_ros_assets/models/yolo11/yolo11s.onnx \
+				--saveEngine=${ISAAC_ROS_WS}/isaac_ros_assets/models/yolo11/yolo11s_fp16.plan \
+				--fp16
 Then use best.plan with isaac_ros_yolov8.
 """
 
+from getpass import getpass
 from pathlib import Path
 from roboflow import Roboflow
 from ultralytics import YOLO
 
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-ROBOFLOW_API_KEY   = "YOUR_API_KEY_HERE"
-ROBOFLOW_WORKSPACE = "your-workspace"       # shown in your Roboflow URL
-ROBOFLOW_PROJECT   = "your-project"         # project slug, not display name
-ROBOFLOW_VERSION   = 1                      # integer version number to export
+ROBOFLOW_WORKSPACE = "RHITCV"       # shown in your Roboflow URL
+ROBOFLOW_PROJECT   = "Icon Detection Test"         # project slug, not display name
+ROBOFLOW_VERSION   = 4                      # integer version number to export
 
 PROJECT_NAME = "yolo11s_realsense"          # groups runs under runs/<PROJECT_NAME>/
 RUN_NAME     = "v1"                         # runs/<PROJECT_NAME>/<RUN_NAME>/
@@ -28,7 +27,8 @@ RUN_NAME     = "v1"                         # runs/<PROJECT_NAME>/<RUN_NAME>/
 
 
 def download_dataset() -> Path:
-    rf = Roboflow(api_key=ROBOFLOW_API_KEY)
+    api_key = getpass("Roboflow API key: ")
+    rf = Roboflow(api_key=api_key)
     dataset = (
         rf.workspace(ROBOFLOW_WORKSPACE)
           .project(ROBOFLOW_PROJECT)
@@ -90,7 +90,7 @@ if __name__ == "__main__":
     print(f"  Weights : {best_pt}")
     print(f"  ONNX    : {onnx_path}")
     print()
-    print("Next steps on the Jetson (done inside isaac ros):")
+    print("Next steps on the Jetson:")
     print(f"  1. Copy {onnx_path.name} to the Jetson")
     print("  2. Run trtexec to compile the TensorRT engine:")
     print(f"       /usr/src/tensorrt/bin/trtexec \\")
