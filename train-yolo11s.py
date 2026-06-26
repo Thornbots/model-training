@@ -17,7 +17,7 @@ from ultralytics import YOLO
 
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-ROBOFLOW_WORKSPACE = "RHITCV"       # shown in your Roboflow URL
+ROBOFLOW_WORKSPACE = "rhitcv"       # shown in your Roboflow URL
 ROBOFLOW_PROJECT   = "Icon Detection Test"         # project slug, not display name
 ROBOFLOW_VERSION   = 4                      # integer version number to export
 
