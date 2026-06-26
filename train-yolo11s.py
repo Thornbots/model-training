@@ -18,7 +18,7 @@ from ultralytics import YOLO
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 ROBOFLOW_WORKSPACE = "rhitcv"       # shown in your Roboflow URL
-ROBOFLOW_PROJECT   = "Icon Detection Test"         # project slug, not display name
+ROBOFLOW_PROJECT   = "icon-detection-test"         # project slug, not display name
 ROBOFLOW_VERSION   = 4                      # integer version number to export
 
 PROJECT_NAME = "yolo11s_realsense"          # groups runs under runs/<PROJECT_NAME>/
