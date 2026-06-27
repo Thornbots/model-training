@@ -235,6 +235,7 @@ def visualize_errors(
                         float(box.conf[0].item()),
                         tuple(box.xyxy[0].tolist()),
                     ))
+            print(f"  {img_path.name}: {len(gt_abs)} GT, {len(pred_abs)} pred, label_found={bool(lbl_path and lbl_path.exists())}")
 
             # ── Greedy GT↔pred matching ──────────────────────────────────────
             gt_matched   = [False] * len(gt_abs)
