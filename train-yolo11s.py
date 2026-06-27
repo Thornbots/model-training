@@ -241,8 +241,10 @@ def visualize_errors(
             pred_matched = [False] * len(pred_abs)
 
             for gi, (gt_cls, gt_box) in enumerate(gt_abs):
+                print(f"  GT  class={gt_cls} ({class_names.get(gt_cls, '?')})")
                 best_iou, best_pi = 0.0, -1
                 for pi, (pred_cls, _, pred_box) in enumerate(pred_abs):
+                    print(f"  Pred class={pred_cls} ({class_names.get(pred_cls, '?')}) conf={conf:.2f}")
                     if pred_matched[pi]:
                         continue
                     ov = iou(gt_box, pred_box)
@@ -386,14 +388,27 @@ if __name__ == "__main__":
         if args.data_yaml:
             data_yaml = Path(args.data_yaml)
         else:
-            candidates = list(Path(".").rglob("data.yaml"))
-            if not candidates:
-                raise RuntimeError(
-                    "Could not locate data.yaml automatically. "
-                    "Pass --data-yaml <path> explicitly."
-                )
-            data_yaml = candidates[0]
-            print(f"  Using data.yaml: {data_yaml}")
+            # args.yaml sits next to the weights dir and records the exact
+            # data.yaml path used at training time — most reliable source
+            args_yaml_path = weights.parent.parent / "args.yaml"
+            if args_yaml_path.exists():
+                import yaml
+                with open(args_yaml_path) as f:
+                    train_args = yaml.safe_load(f)
+                data_yaml = Path(train_args["data"])
+                print(f"  Using data.yaml from args.yaml: {data_yaml}")
+            else:
+                candidates = sorted(Path(".").rglob("data.yaml"))
+                if not candidates:
+                    raise RuntimeError(
+                        "Could not locate data.yaml automatically. "
+                        "Pass --data-yaml <path> explicitly."
+                    )
+                if len(candidates) > 1:
+                    print(f"  [warning] Multiple data.yaml files found, using: {candidates[0]}")
+                    print(f"  [warning] Pass --data-yaml <path> to be explicit")
+                data_yaml = candidates[0]
+                print(f"  Using data.yaml: {data_yaml}")
 
         print("── Error Visualisation ──────────────────────────────────────────")
         visualize_errors(
