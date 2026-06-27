@@ -176,6 +176,14 @@ def visualize_errors(
             print(f"  [error_viz] Skipping '{split}': image directory not found ({img_dir})")
             continue
 
+        # Warn clearly if the label directory is missing — without labels every
+        # prediction will appear as a false positive, which is misleading.
+        if lbl_dir is None or not lbl_dir.exists():
+            print(f"  [error_viz] WARNING: label directory not found for '{split}' ({lbl_dir})")
+            print(f"  [error_viz]   GT boxes cannot be loaded — all predictions will show as FP.")
+            print(f"  [error_viz]   Check that your dataset has a labels/ folder next to images/")
+            lbl_dir = None  # force None so the per-image check is explicit
+
         out_dir = save_root / split_key
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -257,35 +265,48 @@ def visualize_errors(
             annotated = img.copy()
 
             C = {
-                "tp_gt":  (0, 200,   0),   # green  – matched GT
-                "fn_gt":  (0,   0, 220),   # red    – missed GT
-                "fp":     (0, 165, 255),   # orange – false positive pred
+                "tp_gt":   (0, 200,   0),   # green  – GT box that was matched
+                "fn_gt":   (0,   0, 220),   # red    – GT box the model missed
+                "tp_pred": (0, 255, 100),   # bright green – correct prediction
+                "fp":      (0, 165, 255),   # orange – false positive prediction
             }
             FONT = cv2.FONT_HERSHEY_SIMPLEX
 
+            # Draw GT boxes (green = matched, red = missed)
             for gi, (gt_cls, (x1, y1, x2, y2)) in enumerate(gt_abs):
                 color = C["tp_gt"] if gt_matched[gi] else C["fn_gt"]
                 label = f"GT:{class_names.get(gt_cls, gt_cls)}"
                 cv2.rectangle(annotated, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
-                cv2.putText(annotated, label, (int(x1), max(int(y1)-6, 10)),
-                            FONT, 0.5, color, 1, cv2.LINE_AA)
+                cv2.putText(annotated, label, (int(x1), max(int(y1)-8, 10)),
+                            FONT, 0.45, color, 1, cv2.LINE_AA)
 
+            # Draw ALL prediction boxes so their localization is always visible.
+            # TP preds are inset by 2px so they're distinguishable from the GT outline.
             for pi, (pred_cls, pred_conf, (x1, y1, x2, y2)) in enumerate(pred_abs):
                 if pred_matched[pi]:
-                    continue  # TP predictions already shown via GT box
-                label = f"P:{class_names.get(pred_cls, pred_cls)} {pred_conf:.2f}"
-                cv2.rectangle(annotated, (int(x1)+1, int(y1)+1), (int(x2)+1, int(y2)+1),
-                              C["fp"], 2)
-                cv2.putText(annotated, label, (int(x1)+1, max(int(y1)-6, 20)),
-                            FONT, 0.5, C["fp"], 1, cv2.LINE_AA)
+                    color = C["tp_pred"]
+                    cv2.rectangle(annotated, (int(x1)+2, int(y1)+2), (int(x2)-2, int(y2)-2),
+                                  color, 1)
+                    label = f"P:{class_names.get(pred_cls, pred_cls)} {pred_conf:.2f} TP"
+                else:
+                    color = C["fp"]
+                    cv2.rectangle(annotated, (int(x1), int(y1)), (int(x2), int(y2)),
+                                  color, 2)
+                    label = f"P:{class_names.get(pred_cls, pred_cls)} {pred_conf:.2f} FP"
+                cv2.putText(annotated, label, (int(x1), max(int(y2)+12, 20)),
+                            FONT, 0.45, color, 1, cv2.LINE_AA)
 
-            # Small legend
-            legend = [("GT matched", C["tp_gt"]), ("GT missed (FN)", C["fn_gt"]),
-                      ("False positive", C["fp"])]
+            # Legend
+            legend = [
+                ("GT matched (TP)", C["tp_gt"]),
+                ("GT missed  (FN)", C["fn_gt"]),
+                ("Pred TP (inset)",  C["tp_pred"]),
+                ("Pred FP",          C["fp"]),
+            ]
             for li, (txt, col) in enumerate(legend):
                 y = 18 + li * 18
                 cv2.rectangle(annotated, (6, y-12), (16, y), col, -1)
-                cv2.putText(annotated, txt, (20, y), FONT, 0.45, (255,255,255), 1, cv2.LINE_AA)
+                cv2.putText(annotated, txt, (20, y), FONT, 0.42, (255,255,255), 1, cv2.LINE_AA)
 
             cv2.imwrite(str(out_dir / img_path.name), annotated)
             saved += 1
