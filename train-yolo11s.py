@@ -201,7 +201,8 @@ def visualize_errors(
 
             # ── Ground-truth boxes (YOLO format: cls cx cy w h, normalised) ─
             label_stem = img_path.stem.replace("_rf_", ".rf.", 1)
-            lbl_path = (lbl_dir / (img_path.stem + ".txt")) if lbl_dir else None            gt_boxes = []  # (cls_id, cx, cy, w, h)  – normalised
+            lbl_path = (lbl_dir / (img_path.stem + ".txt")) if lbl_dir else None            
+            gt_boxes = []  # (cls_id, cx, cy, w, h)  – normalised
             if lbl_path and lbl_path.exists():
                 for line in lbl_path.read_text().splitlines():
                     parts = line.strip().split()
