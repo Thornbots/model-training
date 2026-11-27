@@ -1,2 +1,6 @@
 /Icon-Detection-Test-*
 *.pt
+# Rendered datasets, training runs, and exported weights stay local.
+/synthetic-data/
+/yolo26s_pose_realsense/
+*.onnx
