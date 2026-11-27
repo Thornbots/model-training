@@ -1,0 +1,15 @@
+# Set path to the output directory containing train/ and val/ before training.
+path: synthetic-data/mixed
+train: train/images
+val: val/images
+kpt_shape: [4, 3]
+flip_idx: [1, 0, 3, 2]
+names:
+  0: blue_hero
+  1: blue_engineer
+  2: blue_infantry
+  3: blue_sentry
+  4: red_hero
+  5: red_engineer
+  6: red_infantry
+  7: red_sentry
