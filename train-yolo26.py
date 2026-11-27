@@ -447,7 +447,7 @@ def run_viz(weights: Path, data_yaml: Path, args) -> None:
                      conf=args.viz_conf, iou_threshold=args.viz_iou, max_images=args.viz_max)
 
 
-def print_next_steps(onnx_path: Path, name: str) -> None:
+def print_next_steps(onnx_path: Path, name: str, num_keypoints: int) -> None:
     print("\nNext steps on the Jetson:")
     print(f"  1. Copy {onnx_path.name} to the Jetson")
     print("  2. Enter Isaac ROS and compile the TensorRT engine:")
@@ -455,7 +455,8 @@ def print_next_steps(onnx_path: Path, name: str) -> None:
     print(f"           --onnx={onnx_path.name} \\")
     print(f"           --saveEngine=${{ISAAC_ROS_WS}}/isaac_ros_assets/models/yolo26/{name}_fp16.plan \\")
     print("           --fp16")
-    print("  3. Point the engine_file_path at that plan (pose: decoder:=yolo26).")
+    print("  3. Launch with engine_file_path at that plan and")
+    print(f"     decoder:=yolo26 num_keypoints:={num_keypoints} (the yolov8 decoder can't read it)")
 
 
 if __name__ == "__main__":
@@ -510,4 +511,4 @@ if __name__ == "__main__":
         print("  SMOKE OK")
         shutil.rmtree(tmp, ignore_errors=True)
     else:
-        print_next_steps(onnx_path, engine_name)
+        print_next_steps(onnx_path, engine_name, 4 if args.task == "pose" else 0)
