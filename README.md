@@ -91,6 +91,10 @@ The headless Blender generator uses the MIT-licensed
 Its class mapping is a **placeholder**: blue Hero (decal 1), Engineer (2),
 Infantry (3 or 4), Sentry are IDs 0–3; red equivalents are IDs 4–7.
 It renders AM02 and AM12 panels with sticker or procedural dot-matrix faces.
+Scenes use procedural floor and wall textures, clutter and bright emissive bars;
+most panels are 1.5–4 m away, with 1–6 m coverage. `--heldout` selects
+separate texture, dot-grid and lighting ranges for held-out evaluation. These
+procedural backgrounds are approximations, not measured RealSense imagery.
 The JSON sidecars record camera-frame position, outward normal and light-bar
 endpoints in metres (x right, y down, z forward), plus class, colour and face.
 The label checker independently projects those endpoints to compare with the

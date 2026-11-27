@@ -15,6 +15,7 @@ p.add_argument('--assets', required=True, type=Path)
 p.add_argument('--output', required=True, type=Path)
 p.add_argument('--count', type=int, default=100)
 p.add_argument('--seed', type=int, default=42)
+p.add_argument('--heldout', action='store_true', help='Use distinct background and lighting ranges')
 p.add_argument('--faces', choices=['sticker', 'mixed', 'matrix'], default='mixed')
 a = p.parse_args(sys.argv[sys.argv.index('--') + 1:])
 rng = random.Random(a.seed)
@@ -68,8 +69,28 @@ def material(name, color, emission=0):
     return m
 
 frame_mat = material('frame', (.08, .08, .08))
-bar_mats = [material('blue', (.01, .08, 1), 4), material('red', (1, .01, .01), 4)]
+bar_mats = [material('blue', (.005, .04, 1), 25), material('red', (1, .005, .005), 25)]
 body_mats = [material(str(i), col) for i, col in enumerate(((.14,.15,.18),(.015,.015,.015),(.18,.02,.02),(.01,.03,.2)))]
+def textured_material(name, color1, color2, scale):
+    m = material(name, color1)
+    nodes, links = m.node_tree.nodes, m.node_tree.links
+    noise = nodes.new('ShaderNodeTexNoise'); noise.inputs['Scale'].default_value = scale
+    noise.inputs['Detail'].default_value = 3
+    ramp = nodes.new('ShaderNodeValToRGB')
+    ramp.color_ramp.elements[0].color = (*color1, 1)
+    ramp.color_ramp.elements[1].color = (*color2, 1)
+    links.new(noise.outputs['Fac'], ramp.inputs['Fac'])
+    links.new(ramp.outputs['Color'], nodes.get('Principled BSDF').inputs['Base Color'])
+    return m
+
+surface_mats = [textured_material(f'surface-{i}', *colors, scale) for i, (colors, scale) in enumerate((
+    (((.025,.03,.035), (.25,.24,.21)), 8),
+    (((.025,.02,.015), (.22,.12,.07)), 12),
+    (((.02,.04,.035), (.12,.22,.17)), 18),
+    (((.02,.025,.05), (.14,.17,.24)), 26),
+    (((.04,.025,.035), (.24,.13,.18)), 35),
+    (((.025,.035,.04), (.17,.22,.25)), 48),
+))]
 face_mats = {}
 for identity, file in enumerate(('1.png', '2.png', '3.png', 'Sentry.png', '4.png')):
     for color in range(2):
@@ -116,21 +137,33 @@ instance_index = 0
 for index in range(a.count):
     for o in list(bpy.data.objects):
         if o not in (cam,) and o.get('dynamic'): bpy.data.objects.remove(o, do_unlink=True)
-    bg = (rng.uniform(.01,.06), rng.uniform(.08,.18), rng.uniform(.18,.35)) if 'heldout' in a.output.parts else tuple(rng.uniform(.02,.3) for _ in range(3))
+    for data in list(bpy.data.meshes):
+        if data.users == 0 and data not in meshes: bpy.data.meshes.remove(data)
+    for action in list(bpy.data.actions):
+        if action.users == 0: bpy.data.actions.remove(action)
+    bg = (rng.uniform(.01,.06), rng.uniform(.08,.18), rng.uniform(.18,.35)) if a.heldout else tuple(rng.uniform(.02,.3) for _ in range(3))
     s.world.node_tree.nodes['Background'].inputs['Color'].default_value = (*bg,1)
-    grid = rng.choice((34, 40) if 'heldout' in a.output.parts else (16, 20, 24, 28))
+    grid = rng.choice((34, 40) if a.heldout else (16, 20, 24, 28))
     for mat in face_mats.values():
         for node in mat.node_tree.nodes:
             if node.label == 'grid_scale': node.inputs[3].default_value = grid
             elif node.label == 'grid_inverse': node.inputs[3].default_value = 1 / grid
     s.view_settings.look = 'None'
-    s.view_settings.exposure = rng.uniform(-1, 1)
+    s.view_settings.exposure = rng.uniform(-1.6, -.8) if a.heldout else rng.uniform(-1.4, -.6)
+    for mat in bar_mats:
+        mat.node_tree.nodes.get('Principled BSDF').inputs['Emission Strength'].default_value = rng.uniform(12, 55)
     s.render.image_settings.quality = rng.randint(55, 98)
     bpy.ops.object.light_add(type='AREA', location=(rng.uniform(-3,3),rng.uniform(-2,3),rng.uniform(-1,1)))
-    light = bpy.context.object; light['dynamic'] = True; light.data.energy = rng.uniform(55, 100) if 'heldout' in a.output.parts else rng.uniform(3, 50); light.data.size = rng.uniform(2,6)
-    for _ in range(rng.randint(3, 12)):
-        z = -rng.uniform(7, 12)
-        obj = cube('background', (rng.uniform(-6,6),rng.uniform(-4,4),z), (rng.uniform(.3,3),rng.uniform(.3,3),rng.uniform(.05,.5)), rng.choice(body_mats)); obj['dynamic'] = True
+    light = bpy.context.object; light['dynamic'] = True; light.data.energy = rng.uniform(55, 100) if a.heldout else rng.uniform(3, 50); light.data.size = rng.uniform(2,6)
+    surfaces = surface_mats[4:] if a.heldout else surface_mats[:4]
+    floor = cube('floor', (0,-.5,-5), (20,.05,20), rng.choice(surfaces)); floor['dynamic'] = True
+    wall = cube('wall', (0,2,-9), (20,5,.1), rng.choice(surfaces)); wall['dynamic'] = True
+    for _ in range(rng.randint(8, 20)):
+        z = -rng.uniform(4, 9)
+        height = rng.uniform(.1, 1.8)
+        obj = cube('clutter', (rng.uniform(-6,6),-.5+height/2,z),
+                   (rng.uniform(.1,1.5),height,rng.uniform(.1,1.2)),
+                   rng.choice(body_mats + surfaces)); obj['dynamic'] = True
     count = rng.choices((0,1,2,3,4), (1,4,4,2,1))[0]
     labels, truth, pending = [], [], []
     for j in range(count):
@@ -140,14 +173,14 @@ for index in range(a.count):
         identity = 4 if identity == 2 and rng.random() < .5 else identity
         matrix = a.faces == 'matrix' or (a.faces == 'mixed' and rng.random() < .5)
         large = rng.random() < .2
-        distance = rng.uniform(1, 6)
-        bpy.ops.object.empty_add(location=(rng.uniform(-.35,.35)*distance, rng.uniform(-.2,.2)*distance, -distance))
+        distance = rng.uniform(1.5, 4) if rng.random() < .8 else rng.uniform(1, 6)
+        bpy.ops.object.empty_add(location=(rng.uniform(-.35,.35)*distance, -.5 + rng.uniform(.10,.35), -distance))
         root = bpy.context.object; root['dynamic'] = True
         center = root.location.copy(); delta = Vector((rng.uniform(-.012,.012)*distance, rng.uniform(-.008,.008)*distance, 0))
         for frame, offset in ((0,-1),(1,0),(2,1)):
             root.location = center + delta*offset; root.keyframe_insert(data_path='location',frame=frame)
         s.frame_set(1)
-        root.rotation_euler = (math.radians(15 + rng.uniform(-10,10)), math.radians(rng.uniform(-75,75)), math.radians(rng.uniform(-8,8)))
+        root.rotation_euler = (math.radians(15), math.radians(rng.uniform(-75,75)), math.radians(rng.uniform(-8,8)))
         mesh = bpy.data.objects.new('CAD', meshes[large]); bpy.context.collection.objects.link(mesh); mesh.parent = root; mesh['dynamic'] = True
         if not mesh.data.materials: mesh.data.materials.append(frame_mat)
         spacing = .216 if large else .1258
