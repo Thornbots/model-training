@@ -4,14 +4,17 @@ import json
 import math
 import random
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import bpy
 from bpy_extras.object_utils import world_to_camera_view
-from mathutils import Vector
+from mathutils import Euler, Matrix, Vector
 
 p = argparse.ArgumentParser()
 p.add_argument('--assets', required=True, type=Path)
+p.add_argument('--sim', required=True, type=Path, help='Read-only sim checkout containing sentry and field CAD')
+p.add_argument('--hdri', required=True, type=Path, help='Directory containing at least two HDR environment maps')
 p.add_argument('--output', required=True, type=Path)
 p.add_argument('--count', type=int, default=100)
 p.add_argument('--seed', type=int, default=42)
@@ -133,93 +136,197 @@ def project(point):
     v = world_to_camera_view(s, cam, point)
     return (v.x * 640, (1-v.y) * 480)
 
+# STL coordinates are in the URDF/field Z-up frame and already in metres.
+def load_stl(path):
+    bpy.ops.wm.stl_import(filepath=str(path))
+    obj = bpy.context.selected_objects[0]
+    data = obj.data
+    data.use_fake_user = True
+    bpy.data.objects.remove(obj, do_unlink=True)
+    return data
+
+
+robot_dir = a.sim / 'urdf/sentry_v2'
+robot_names = ['root', 'head', 'head_pitch'] + [f'{part}_{i}' for part in ('carrier', 'wheel') for i in range(4)]
+robot_meshes = {name: load_stl(robot_dir / 'meshes' / f'{name}.stl') for name in robot_names}
+urdf = ET.parse(robot_dir / 'sentry_v2.urdf').getroot()
+joints = {}
+for joint in urdf.findall('joint'):
+    origin = joint.find('origin')
+    if origin is not None:
+        xyz = tuple(float(v) for v in origin.get('xyz', '0 0 0').split())
+        rpy = tuple(float(v) for v in origin.get('rpy', '0 0 0').split())
+        joints[joint.get('name')] = (xyz, rpy)
+
+
+def part(name, data, parent, location=(0, 0, 0), rotation=(0, 0, 0), mat=None):
+    obj = bpy.data.objects.new(name, data); bpy.context.collection.objects.link(obj)
+    obj.parent = parent; obj.location = location; obj.rotation_euler = rotation
+    obj['dynamic'] = True
+    if mat:
+        if not data.materials: data.materials.append(mat)
+        obj.material_slots[0].link = 'OBJECT'; obj.material_slots[0].material = mat
+    return obj
+
+
+def empty(name, parent=None, location=(0, 0, 0), rotation=(0, 0, 0)):
+    obj = bpy.data.objects.new(name, None); bpy.context.collection.objects.link(obj)
+    obj.parent = parent; obj.location = location; obj.rotation_euler = rotation
+    obj['dynamic'] = True
+    return obj
+
+
+arena_mats = {
+    'floor': material('arena floor', (.23,.22,.20)),
+    'platform': material('arena platform', (.28,.28,.27)),
+    'pole': material('arena poles', (.19,.19,.18)),
+    'wood': material('arena wood', (.29,.18,.1)),
+    'bumpy_road': material('arena road', (.19,.19,.18)),
+    'dark': material('arena dark', (.05,.05,.05)),
+    'tape_red': material('red tape', (.6,.02,.02)),
+    'tape_blue': material('blue tape', (.02,.04,.6)),
+    'tape_green': material('green tape', (.02,.5,.03)),
+}
+arena = []
+for name, mat in arena_mats.items():
+    data = load_stl(a.sim / 'world/arcc_s2_3v3/meshes' / f'visual_{name}.stl')
+    obj = bpy.data.objects.new(f'arena-{name}', data); bpy.context.collection.objects.link(obj)
+    data.materials.append(mat); arena.append(obj)
+
+hdri_images = [bpy.data.images.load(str(path), check_existing=True) for path in sorted(a.hdri.glob('*.hdr'))] if a.hdri else []
+if len(hdri_images) < 2:
+    raise ValueError('--hdri must contain at least two .hdr files for separate held-out backgrounds')
+world_nodes = s.world.node_tree.nodes
+world_links = s.world.node_tree.links
+background = world_nodes.get('Background')
+env = world_nodes.new('ShaderNodeTexEnvironment')
+metal = [material('metal grey', (.12,.13,.14)), material('metal black', (.025,.027,.03)),
+         textured_material('carbon', (.012,.012,.012), (.09,.09,.09), 80)]
+shell = [material('team blue shell', (.015,.035,.24)), material('team red shell', (.25,.015,.012))]
+# Panel local X is horizontal, Y is up and Z is outward; the URDF armor X points outward.
+panel_rotation = Matrix(((0,0,1), (1,0,0), (0,1,0))).to_4x4().to_euler()
+cam.location = (0, -3.8, .43)
+cam.rotation_euler = Vector((0, 1, -.03)).to_track_quat('-Z', 'Y').to_euler()
+
+
+def camera_point(point):
+    v = cam.matrix_world.inverted() @ point
+    return [v.x, -v.y, -v.z]
+
+
+def belongs_to(obj, ancestor):
+    while obj:
+        if obj == ancestor: return True
+        obj = obj.parent
+    return False
+
+
 instance_index = 0
 for index in range(a.count):
-    for o in list(bpy.data.objects):
-        if o not in (cam,) and o.get('dynamic'): bpy.data.objects.remove(o, do_unlink=True)
+    for obj in list(bpy.data.objects):
+        if obj.get('dynamic'): bpy.data.objects.remove(obj, do_unlink=True)
     for data in list(bpy.data.meshes):
         if data.users == 0 and data not in meshes: bpy.data.meshes.remove(data)
     for action in list(bpy.data.actions):
         if action.users == 0: bpy.data.actions.remove(action)
-    bg = (rng.uniform(.01,.06), rng.uniform(.08,.18), rng.uniform(.18,.35)) if a.heldout else tuple(rng.uniform(.02,.3) for _ in range(3))
-    s.world.node_tree.nodes['Background'].inputs['Color'].default_value = (*bg,1)
+    for link in list(background.inputs['Color'].links): world_links.remove(link)
+    alternate = bool(hdri_images) and index % 4 == 0
+    if alternate:
+        env.image = hdri_images[-1] if a.heldout else hdri_images[0]
+        world_links.new(env.outputs['Color'], background.inputs['Color'])
+        floor = cube('alternate floor', (0,0,-.04), (20,20,.08), rng.choice(surface_mats[4:] if a.heldout else surface_mats[:4])); floor['dynamic'] = True
+    else:
+        background.inputs['Color'].default_value = (.12,.12,.12,1)
+    background.inputs['Strength'].default_value = rng.uniform(.15,.4)
+    for obj in arena: obj.hide_render = alternate; obj.hide_viewport = alternate
     grid = rng.choice((34, 40) if a.heldout else (16, 20, 24, 28))
     for mat in face_mats.values():
         for node in mat.node_tree.nodes:
             if node.label == 'grid_scale': node.inputs[3].default_value = grid
             elif node.label == 'grid_inverse': node.inputs[3].default_value = 1 / grid
-    s.view_settings.look = 'None'
     s.view_settings.exposure = rng.uniform(-1.6, -.8) if a.heldout else rng.uniform(-1.4, -.6)
     for mat in bar_mats:
-        mat.node_tree.nodes.get('Principled BSDF').inputs['Emission Strength'].default_value = rng.uniform(12, 55)
-    s.render.image_settings.quality = rng.randint(55, 98)
-    bpy.ops.object.light_add(type='AREA', location=(rng.uniform(-3,3),rng.uniform(-2,3),rng.uniform(-1,1)))
-    light = bpy.context.object; light['dynamic'] = True; light.data.energy = rng.uniform(55, 100) if a.heldout else rng.uniform(3, 50); light.data.size = rng.uniform(2,6)
-    surfaces = surface_mats[4:] if a.heldout else surface_mats[:4]
-    floor = cube('floor', (0,-.5,-5), (20,.05,20), rng.choice(surfaces)); floor['dynamic'] = True
-    wall = cube('wall', (0,2,-9), (20,5,.1), rng.choice(surfaces)); wall['dynamic'] = True
-    for _ in range(rng.randint(8, 20)):
-        z = -rng.uniform(4, 9)
-        height = rng.uniform(.1, 1.8)
-        obj = cube('clutter', (rng.uniform(-6,6),-.5+height/2,z),
-                   (rng.uniform(.1,1.5),height,rng.uniform(.1,1.2)),
-                   rng.choice(body_mats + surfaces)); obj['dynamic'] = True
-    count = rng.choices((0,1,2,3,4), (1,4,4,2,1))[0]
+        mat.node_tree.nodes.get('Principled BSDF').inputs['Emission Strength'].default_value = rng.uniform(12,55)
+    s.render.image_settings.quality = rng.randint(55,98)
+    for location, energy, color in (((0,0,5), rng.uniform(300,600), (1,1,1)),
+                                    ((rng.uniform(-4,4),0,3), rng.uniform(40,100), rng.choice(((1,.25,.2),(.2,.3,1))))):
+        bpy.ops.object.light_add(type='AREA', location=location)
+        light = bpy.context.object; light['dynamic'] = True; light.data.energy = energy
+        light.data.color = color; light.data.size = 5
     labels, truth, pending = [], [], []
+    count = rng.choices((1,2,3), (3,5,2))[0]
     for j in range(count):
-        cls = (instance_index + a.seed) % 8
+        cls = ((instance_index // 2) % 4) + 4 * (instance_index % 2)
         instance_index += 1
         color, identity = divmod(cls, 4)
         identity = 4 if identity == 2 and rng.random() < .5 else identity
         matrix = a.faces == 'matrix' or (a.faces == 'mixed' and rng.random() < .5)
-        large = rng.random() < .2
         distance = rng.uniform(1.5, 4) if rng.random() < .8 else rng.uniform(1, 6)
-        bpy.ops.object.empty_add(location=(rng.uniform(-.35,.35)*distance, -.5 + rng.uniform(.10,.35), -distance))
-        root = bpy.context.object; root['dynamic'] = True
-        center = root.location.copy(); delta = Vector((rng.uniform(-.012,.012)*distance, rng.uniform(-.008,.008)*distance, 0))
+        x = rng.uniform(-.3,.3) * distance
+        robot = empty('robot', location=(x, -3.8 + math.sqrt(distance**2 - x**2), 0))
+        variant = rng.randrange(3)
+        robot.scale = (rng.uniform(.9,1.15) if variant == 1 else rng.uniform(.95,1.05),
+                       rng.uniform(.9,1.1), rng.uniform(.95,1.05))
+        yaw = rng.uniform(-math.pi,math.pi); spin = rng.uniform(-.12,.12)
         for frame, offset in ((0,-1),(1,0),(2,1)):
-            root.location = center + delta*offset; root.keyframe_insert(data_path='location',frame=frame)
+            robot.rotation_euler.z = yaw + offset * spin
+            robot.keyframe_insert(data_path='rotation_euler', frame=frame)
         s.frame_set(1)
-        root.rotation_euler = (math.radians(15), math.radians(rng.uniform(-75,75)), math.radians(rng.uniform(-8,8)))
-        mesh = bpy.data.objects.new('CAD', meshes[large]); bpy.context.collection.objects.link(mesh); mesh.parent = root; mesh['dynamic'] = True
-        if not mesh.data.materials: mesh.data.materials.append(frame_mat)
-        spacing = .216 if large else .1258
-        length = .060
-        for side in (-1,1):
-            bar = cube('bar', (side*spacing/2,0,.004), (.010,length,.008), bar_mats[color], root); bar['dynamic'] = True
-        bpy.ops.mesh.primitive_plane_add(size=1)
-        face = bpy.context.object; face.parent = root; face.location = (0,0,.002); face.scale = (spacing-.012, .105 if large else .115, 1); face.data.materials.append(face_mats[identity,color,matrix]); face['dynamic'] = True
-        body = cube('body', (0,0,-.07), (.36,.24,.12), rng.choice(body_mats), root); body['dynamic'] = True
-        bpy.context.view_layer.update()
-        pts = [root.matrix_world @ Vector((x,y,.008)) for x,y in ((-spacing/2,length/2),(spacing/2,length/2),(spacing/2,-length/2),(-spacing/2,-length/2))]
-        uv = [project(point) for point in pts]
-        if not all(0 <= x < 640 and 0 <= y < 480 for x,y in uv):
-            # Keep a visible instance only if its complete keypoint set fits the image.
-            for o in [mesh,face,body,root] + [x for x in bpy.data.objects if x.parent == root]:
-                if o.name in bpy.data.objects: bpy.data.objects.remove(o,do_unlink=True)
-            continue
-        bar_corners = [project(root.matrix_world @ Vector((side*spacing/2+dx, y, .008)))
-                       for side in (-1,1) for dx in (-.005,.005) for y in (-length/2,length/2)]
-        pending.append((cls, color, matrix, large, root, spacing, length, pts, uv, bar_corners))
+        part('chassis', robot_meshes['root'], robot, mat=rng.choice(metal + [shell[color]]))
+        head_xyz, head_rpy = joints['headlink']
+        head = empty('head yaw', robot, head_xyz, head_rpy); head.rotation_euler.z = rng.uniform(-math.pi,math.pi)
+        if variant == 2: head.scale.z = rng.uniform(1.05,1.15)
+        part('gimbal head', robot_meshes['head'], head, mat=rng.choice(metal + [shell[color]]))
+        pitch_xyz, pitch_rpy = joints['headpitch']
+        pitch = empty('head pitch', head, pitch_xyz, pitch_rpy); pitch.rotation_euler.y = rng.uniform(-.3,.3)
+        part('barrel', robot_meshes['head_pitch'], pitch, mat=rng.choice(metal))
+        for i in range(4):
+            xyz, rpy = joints[f'suspension_{i}']
+            carrier = empty(f'carrier-{i}', robot, xyz, rpy)
+            part('carrier', robot_meshes[f'carrier_{i}'], carrier, mat=rng.choice(metal))
+            wheel = part('wheel', robot_meshes[f'wheel_{i}'], carrier, mat=metal[1])
+            wheel.rotation_euler[1 - i % 2] = rng.uniform(-math.pi,math.pi)
+        led = cube('referee indicator', (0,.16,.30), (.20,.015,.012), bar_mats[color], robot); led['dynamic'] = True
+        for i in range(4):
+            xyz, rpy = joints[f'armor_{i}link']
+            mount = empty('armor mount', robot, xyz, rpy)
+            panel = empty('panel', mount); panel.rotation_euler = panel_rotation
+            part('armor CAD', meshes[0], panel, mat=frame_mat)
+            spacing, length = .1258, .060
+            for side in (-1,1):
+                bar = cube('bar', (side*spacing/2,0,.004), (.010,length,.008), bar_mats[color], panel); bar['dynamic'] = True
+            bpy.ops.mesh.primitive_plane_add(size=1)
+            face = bpy.context.object; face.parent = panel; face.location = (0,0,.002)
+            face.scale = (spacing-.012,.115,1); face.data.materials.append(face_mats[identity,color,matrix]); face['dynamic'] = True
+            pending.append((cls, color, matrix, panel, spacing, length))
     bpy.context.view_layer.update()
     depsgraph = bpy.context.evaluated_depsgraph_get()
-    for cls, color, matrix, large, root, spacing, length, pts, uv, bar_corners in pending:
+    for cls, color, matrix, panel, spacing, length in pending:
+        pos = panel.matrix_world @ Vector((0,0,.008))
+        normal = (panel.matrix_world.to_3x3().inverted().transposed() @ Vector((0,0,1))).normalized()
+        if normal.dot(cam.location - pos) <= 0: continue
+        pts = [panel.matrix_world @ Vector((x,y,.008)) for x,y in ((-spacing/2,length/2),(spacing/2,length/2),(spacing/2,-length/2),(-spacing/2,-length/2))]
+        uv = [project(point) for point in pts]
+        if not all(0 <= x < 640 and 0 <= y < 480 for x,y in uv): continue
         paired = sorted(zip(uv, pts), key=lambda pair: pair[0][1])
         paired = sorted(paired[:2], key=lambda pair: pair[0][0]) + sorted(paired[2:], key=lambda pair: pair[0][0], reverse=True)
-        ordered = [point for point, _ in paired]
         visibility = []
         for _, point in paired:
             ray = point - cam.location
-            hit, location, _, _, obj, _ = s.ray_cast(depsgraph, cam.location, ray.normalized(), distance=ray.length - 0.001)
-            visibility.append(1 if hit and obj.parent != root else 2)
-        xs, ys = zip(*bar_corners)
-        x0, x1 = max(0,min(xs)), min(640,max(xs))
-        y0, y1 = max(0,min(ys)), min(480,max(ys))
-        labels.append(' '.join(map(str, [cls,(x0+x1)/1280,(y0+y1)/960,(x1-x0)/640,(y1-y0)/480]+[v for (x,y),vis in zip(ordered,visibility) for v in (x/640,y/480,vis)])))
-        pos = sum(pts, Vector()) / 4; normal = root.matrix_world.to_quaternion() @ Vector((0,0,1))
-        truth.append(dict(class_id=cls, colour=('blue','red')[color], face='matrix' if matrix else 'sticker', large=large, keypoints_camera=[[point.x, -point.y, -point.z] for _, point in paired], visibility=visibility, position=[pos.x,-pos.y,-pos.z], normal=[normal.x,-normal.y,-normal.z], spacing=spacing, length=length))
-    stem=f'{index:06d}'
+            hit, _, _, _, obj, _ = s.ray_cast(depsgraph, cam.location, ray.normalized(), distance=ray.length - .001)
+            visibility.append(0 if hit and not belongs_to(obj, panel) else 2)
+        if all(vis == 0 for vis in visibility): continue
+        corners = [project(panel.matrix_world @ Vector((side*spacing/2+dx, y, .008)))
+                   for side in (-1,1) for dx in (-.005,.005) for y in (-length/2,length/2)]
+        xs, ys = zip(*corners); x0, x1 = max(0,min(xs)), min(640,max(xs)); y0, y1 = max(0,min(ys)), min(480,max(ys))
+        labels.append(' '.join(map(str, [cls,(x0+x1)/1280,(y0+y1)/960,(x1-x0)/640,(y1-y0)/480]+[v for (x,y),vis in zip([p for p,_ in paired],visibility) for v in (x/640,y/480,vis)])))
+        normal_cam = cam.matrix_world.to_quaternion().inverted() @ normal
+        truth.append(dict(class_id=cls, colour=('blue','red')[color], face='matrix' if matrix else 'sticker', large=False,
+                          keypoints_camera=[camera_point(point) for _,point in paired], visibility=visibility,
+                          position=camera_point(pos), normal=[normal_cam.x,-normal_cam.y,-normal_cam.z],
+                          spacing=(pts[1]-pts[0]).length, length=(pts[3]-pts[0]).length))
+    stem = f'{index:06d}'
     (a.output/'labels'/f'{stem}.txt').write_text('\n'.join(labels)+'\n' if labels else '')
-    (a.output/'truth'/f'{stem}.json').write_text(json.dumps(dict(width=640, height=480, hfov_degrees=69, panels=truth), indent=2) + '\n')
-    s.render.filepath=str(a.output/'images'/f'{stem}.jpg')
+    (a.output/'truth'/f'{stem}.json').write_text(json.dumps(dict(width=640,height=480,hfov_degrees=69,panels=truth),indent=2)+'\n')
+    s.render.filepath = str(a.output/'images'/f'{stem}.jpg')
     bpy.ops.render.render(write_still=True)

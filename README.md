@@ -90,24 +90,29 @@ The headless Blender generator uses the MIT-licensed
 [armor_module CAD and decals](https://github.com/jiushipanta/armor_module).
 Its class mapping is a **placeholder**: blue Hero (decal 1), Engineer (2),
 Infantry (3 or 4), Sentry are IDs 0–3; red equivalents are IDs 4–7.
-It renders AM02 and AM12 panels with sticker or procedural dot-matrix faces.
-Scenes use procedural floor and wall textures, clutter and bright emissive bars;
-most panels are 1.5–4 m away, with 1–6 m coverage. `--heldout` selects
-separate texture, dot-grid and lighting ranges for held-out evaluation. These
-procedural backgrounds are approximations, not measured RealSense imagery.
+It mounts AM02 panels with sticker or procedural dot-matrix faces on sentry
+CAD using the sim URDF armor joints. Scenes use the ARC field meshes, posed
+robot parts, team-colour indicators, and bright emissive armor; one quarter
+use HDR backgrounds. Most robots are 1.5–4 m away, with 1–6 m coverage.
+`--heldout` selects a separate HDR background, dot grid and lighting ranges.
+These scenes are approximations, not measured RealSense imagery.
 The JSON sidecars record camera-frame position, outward normal and light-bar
 endpoints in metres (x right, y down, z forward), plus class, colour and face.
 The label checker independently projects those endpoints to compare with the
 YOLO pose labels. This is a small sample, not a training dataset or a substitute
 for validating against physical panels.
 
-For example, from this repository on macOS with Blender 4.3.2 installed:
+Use the sim checkout containing `urdf/sentry_v2` and `world/arcc_s2_3v3`,
+and a directory with at least two `.hdr` files, such as CC0 maps from
+[Poly Haven](https://polyhaven.com/hdris). The first and last sorted maps are
+reserved for training and held-out scenes respectively. For example, from this
+repository on macOS with Blender 4.3.2 installed:
 
 ```bash
 git clone https://github.com/jiushipanta/armor_module.git /tmp/armor_module
 python3.12 -m venv /tmp/armor-synthetic-venv
 /tmp/armor-synthetic-venv/bin/pip install numpy opencv-python-headless
-/path/to/Blender.app/Contents/MacOS/Blender -b -t 8 --python synthetic/render.py -- --assets /tmp/armor_module --output /tmp/armor-synthetic-sample --count 40 --seed 42
+/path/to/Blender.app/Contents/MacOS/Blender -b -t 8 --python synthetic/render.py -- --assets /tmp/armor_module --sim /path/to/sim --hdri /path/to/hdris --output /tmp/armor-synthetic-sample --count 40 --seed 42
 /tmp/armor-synthetic-venv/bin/python synthetic/sensor_noise.py /tmp/armor-synthetic-sample/images --seed 42
 /tmp/armor-synthetic-venv/bin/python synthetic/check_labels.py /tmp/armor-synthetic-sample
 /tmp/armor-synthetic-venv/bin/python synthetic/overlay_labels.py /tmp/armor-synthetic-sample /tmp/armor-synthetic-overlays
